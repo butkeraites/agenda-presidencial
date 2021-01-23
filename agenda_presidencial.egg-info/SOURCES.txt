@@ -1,0 +1,5 @@
+setup.py
+agenda_presidencial.egg-info/PKG-INFO
+agenda_presidencial.egg-info/SOURCES.txt
+agenda_presidencial.egg-info/dependency_links.txt
+agenda_presidencial.egg-info/top_level.txt

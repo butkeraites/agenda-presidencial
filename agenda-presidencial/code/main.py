@@ -91,9 +91,6 @@ def transform_compromises_in_dataframe(year, month, day, initial_index):
     
     return pd.DataFrame(df_compromises)
 
-engine = create_engine('sqlite:////home/barbaruiva/Documents/Database/AGENDA_PRESIDENCIAL.db', echo=False)
-conn = engine.connect()
-
 def get_max_id_and_max_date(engine):
     result = pd.read_sql_query("SELECT MAX(A.MEETING_ID) MAX_ID, STRFTIME('%Y-%m-%d', MAX(A.BEGIN_HOUR)) MAX_DATE FROM AGENDA_PRESIDENCIAL AS A", engine)
     parameters = {
@@ -102,6 +99,8 @@ def get_max_id_and_max_date(engine):
     }
     return parameters
 
+engine = create_engine('sqlite:////home/barbaruiva/Documents/Database/AGENDA_PRESIDENCIAL.db', echo=False)
+conn = engine.connect()
 parameters = get_max_id_and_max_date(engine)
 df_compromises = transform_compromises_in_dataframe(parameters['MAX_DATE'].year, parameters['MAX_DATE'].month, parameters['MAX_DATE'].day, parameters['MAX_ID'])
 df_compromises.set_index('MEETING_ID', inplace=True)

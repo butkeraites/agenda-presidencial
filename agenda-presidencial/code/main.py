@@ -92,7 +92,21 @@ def transform_compromises_in_dataframe(year, month, day, initial_index):
     return pd.DataFrame(df_compromises)
 
 engine = create_engine('sqlite:////home/barbaruiva/Documents/Database/AGENDA_PRESIDENCIAL.db', echo=False)
+conn = engine.connect()
 
+def get_max_id_and_max_date(engine):
+    result = pd.read_sql_query("SELECT MAX(A.MEETING_ID) MAX_ID, STRFTIME('%Y-%m-%d', MAX(A.BEGIN_HOUR)) MAX_DATE FROM AGENDA_PRESIDENCIAL AS A", engine)
+    parameters = {
+        'MAX_ID' : result['MAX_ID'][0],
+        'MAX_DATE' : datetime.strptime(result['MAX_DATE'][0], '%Y-%m-%d') + timedelta(days=1)
+    }
+    return parameters
+
+parameters = get_max_id_and_max_date(engine)
+df_compromises = transform_compromises_in_dataframe(parameters['MAX_DATE'].year, parameters['MAX_DATE'].month, parameters['MAX_DATE'].day, parameters['MAX_ID'])
+df_compromises.set_index('MEETING_ID', inplace=True)
+print('Numero de linhas a serem incluidas: ' + str(len(df_compromises)))
+df_compromises.to_sql('AGENDA_PRESIDENCIAL', con=engine, if_exists='append')
 
 
 # PRIMEIRA INCLUSAO DE REGISTROS NA BASE

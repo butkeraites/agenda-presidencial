@@ -1,6 +1,7 @@
 import requests
+import pandas as pd
 from bs4 import BeautifulSoup
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 
 def get_all_dates(year, month, day):
@@ -22,18 +23,9 @@ def prepare_calls(year, month, day):
         calls[date] = url
     return calls
 
-def get_all_compromises_from_date(url):
+def get_all_compromises_from_date(url, campos_de_interesse):
     page = requests.get(url)
     soup = BeautifulSoup(page.content, 'html.parser')
-
-    campos_de_interesse = {
-        'item-compromisso' : [
-            'compromisso-inicio',
-            'compromisso-fim',
-            'compromisso-titulo',
-            'compromisso-local'
-        ]
-    }
 
     # Compromissos do dia
     compromissos = []
@@ -47,11 +39,41 @@ def get_all_compromises_from_date(url):
             compromissos.append(compromisso)
     return compromissos
 
-def get_all_compromises(year, month, day):
+def get_all_compromises(year, month, day, campos_de_interesse):
     calls = prepare_calls(year, month, day)
     compromises = {}
     for call in calls:
-        compromises[call] = get_all_compromises_from_date(calls[call])
+        compromises[call] = get_all_compromises_from_date(calls[call], campos_de_interesse)
     return compromises
 
-print(get_all_compromises(2021,1,21))
+def transform_compromises_in_dataframe(year, month, day):
+    df_compromises = {
+        'BEGIN_HOUR' : [],
+        'END_HOUR' : [],
+        'MEETING_TITLE' : [],
+        'MEETING_LOCATION' : []
+    }
+    
+    campos_de_interesse = {
+        'item-compromisso' : [
+            'compromisso-inicio',
+            'compromisso-fim',
+            'compromisso-titulo',
+            'compromisso-local'
+        ]
+    }
+
+    compromises = get_all_compromises(year, month, day, campos_de_interesse)
+    
+    for dates in compromises:
+        for meeting in compromises[dates]:
+            if meeting:
+                df_compromises['BEGIN_HOUR'].append(datetime.strptime(dates + meeting['compromisso-inicio'], '%Y-%m-%d%Hh%M'))
+                df_compromises['END_HOUR'].append(datetime.strptime(dates + meeting['compromisso-fim'], '%Y-%m-%d%Hh%M'))
+                df_compromises['MEETING_TITLE'].append(meeting['compromisso-titulo'])
+                df_compromises['MEETING_LOCATION'].append(meeting['compromisso-local'])
+    
+    return pd.DataFrame(df_compromises)
+
+
+print(transform_compromises_in_dataframe(2021,1,21))

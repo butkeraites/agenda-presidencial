@@ -5,9 +5,26 @@ from datetime import date, datetime, timedelta
 import dash
 import dash_html_components as html
 import dash_core_components as dcc
+import dash_bootstrap_components as dbc
 import plotly.express as px
 import plotly.graph_objects as go
 from dash.dependencies import Input, Output
+
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.decomposition import PCA
+
+from nltk.corpus import stopwords
+import nltk
+
+
+def return_stop_words_portuguese():
+    words = []
+    nltk.download('stopwords')
+    language = "portuguese"
+    for word in stopwords.words(language):
+        words.append(word)
+    return words
+
 
 def hour_rounder(t):
     # Rounds to nearest hour by adding a timedelta hour if minute >= 30
@@ -92,7 +109,6 @@ agrupado_agenda_hora_diaria = px.bar(df_atividades_por_hora,
 
 #Agrupado atividades oficiais por local
 df_atividades_por_local = df.groupby(['MEETING_LOCATION'])['MEETING_ID'].count().reset_index()
-
 agrupado_agenda_local = px.treemap(df_atividades_por_local,
                 path=["MEETING_LOCATION"],
                 values="MEETING_ID", 
@@ -101,27 +117,50 @@ agrupado_agenda_local = px.treemap(df_atividades_por_local,
                      "MEETING_ID": "Qtd. de Atividades Oficias"
                  })
 
+#Examinando os tipos de reuniões que foram realizadas
+tf_idf_vec_smooth = TfidfVectorizer(use_idf=True,  
+                        smooth_idf=True,  
+                        ngram_range=(1,4),stop_words=return_stop_words_portuguese())
+tf_idf_data_smooth = tf_idf_vec_smooth.fit_transform(list(df['MEETING_TITLE']))
+tf_idf_dataframe_smooth=pd.DataFrame(tf_idf_data_smooth.toarray(),columns=tf_idf_vec_smooth.get_feature_names())
+
+pca = PCA(n_components = 2)
+df_reduced_dim = pd.DataFrame(data=pca.fit_transform(tf_idf_dataframe_smooth))
+df_reduced_dim = df_reduced_dim.add_prefix('DIMENSION_').reset_index()
+completed_df = df.reset_index().merge(df_reduced_dim, on='index', how='left').drop(['index'], axis=1)
+
+plot_por_similaridade = px.scatter(completed_df, x="DIMENSION_0", y="DIMENSION_1", color="MEETING_LOCATION",
+                 size='MEETING_DURATION', hover_data=['MEETING_TITLE'], labels={
+                     "DIMENSION_0" : "Dimensão de projeção x",
+                     "DIMENSION_1" : "Dimensão de projeção y",
+                     "MEETING_LOCATION" : "Local da atividade",
+                     "MEETING_DURATION" : "Duração da atividade",
+                     "MEETING_TITLE" : "Descrição da Atividade"
+                 })
+
 # Initialise the app
-app = dash.Dash(__name__)
+external_stylesheets = [dbc.themes.FLATLY]
+app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
 
 # Define the app
 app.layout = html.Div(children=[
     html.H1(children='Analise da Agenda Presidencial'),
-    html.Div(className='row',  # Define the row element
-                children=[
-                    html.Div(className='grafico-de-barra-pequeno', children = [
-                        html.H2('Quantidade de atividades oficiais por hora de início'),
-                        dcc.Graph(id='agrupado-agenda-diaria', figure = agrupado_agenda_hora_diaria)
-                    ]),  
-                    html.Div(className='grafico-de-barra-grande', children = [
-                        html.H2('Horas de atividades oficiais por mês'),
-                        dcc.Graph(id='agrupado-agenda-mensal', figure = agrupado_agenda_mensal)
-                    ]),  
-                    html.Div(className='diagrama-de-bloco', children = [
-                        html.H2('Quantidade de atividades oficiais por local'),
-                        dcc.Graph(id='agrupado-local', figure = agrupado_agenda_local)
-                    ])
-                ])
+    html.Div(className='grafico-de-barra-pequeno', children = [
+        html.H2('Quantidade de atividades oficiais por hora de início'),
+        dcc.Graph(id='agrupado-agenda-diaria', figure = agrupado_agenda_hora_diaria)
+    ]),
+    html.Div(className='grafico-de-barra-grande', children = [
+        html.H2('Horas de atividades oficiais por mês'),
+        dcc.Graph(id='agrupado-agenda-mensal', figure = agrupado_agenda_mensal)
+    ]),  
+    html.Div(className='diagrama-de-bloco', children = [
+        html.H2('Quantidade de atividades oficiais por local'),
+        dcc.Graph(id='agrupado-local', figure = agrupado_agenda_local)
+    ]),
+    html.Div(className='grafico-de-dispersao', children = [
+        html.H2('Atividades oficiais agrupadas por similaridade'),
+        dcc.Graph(id='agrupado-similaridade', figure = plot_por_similaridade)
+    ])
 ], style={'width': '500'})
 
 

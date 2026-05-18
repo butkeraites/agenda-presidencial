@@ -1,4 +1,5 @@
 import math
+import os
 import pandas as pd
 pd.options.plotting.backend = "plotly"
 from sqlalchemy import create_engine
@@ -18,7 +19,8 @@ from sklearn.decomposition import PCA
 from nltk.corpus import stopwords
 import nltk
 
-complete_path = '/home/agendapresidencial/mysite/data/'
+BASE = os.path.dirname(os.path.abspath(__file__))
+complete_path = os.path.join(BASE, 'data') + os.sep
 template='plotly_dark'
 
 def get_callendar_types(df):
@@ -163,6 +165,7 @@ comparativo_percentual = str(int(list(comparativo_percentual)[0])) + "%"
 
 # Initialise the app
 app = dash.Dash(__name__)
+server = app.server
 app.config.suppress_callback_exceptions = True
 
 # Define the app

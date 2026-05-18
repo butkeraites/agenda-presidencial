@@ -1,4 +1,5 @@
 import math
+import os
 import pandas as pd
 pd.options.plotting.backend = "plotly"
 from sqlalchemy import create_engine
@@ -18,7 +19,9 @@ from sklearn.decomposition import PCA
 from nltk.corpus import stopwords
 import nltk
 
-complete_path = '/home/barbaruiva/Documents/agenda-presidencial/agenda-presidencial/code/data/'
+BASE = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = 'sqlite:///' + os.path.join(BASE, 'data', 'agenda.db')
+complete_path = os.path.join(BASE, 'data') + os.sep
 
 def return_stop_words_portuguese():
     words = []
@@ -36,12 +39,12 @@ def hour_rounder(t):
 
 
 def get_all_data():
-    engine = create_engine('sqlite:////home/barbaruiva/Documents/Database/AGENDA_PRESIDENCIAL.db', echo=False)
+    engine = create_engine(DB_PATH, echo=False)
     conn = engine.connect()
     return pd.read_sql_query("SELECT * FROM AGENDA_PRESIDENCIAL", engine)
 
 def get_all_callendar():
-    engine = create_engine('sqlite:////home/barbaruiva/Documents/Database/AGENDA_PRESIDENCIAL.db', echo=False)
+    engine = create_engine(DB_PATH, echo=False)
     conn = engine.connect()
     return pd.read_sql_query("SELECT * FROM CALENDARIO", engine)
 

@@ -1,8 +1,12 @@
+import os
 import requests
 import pandas as pd
 from sqlalchemy import create_engine
 from bs4 import BeautifulSoup
 from datetime import date, datetime, timedelta
+
+BASE = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = 'sqlite:///' + os.path.join(BASE, 'data', 'agenda.db')
 
 
 def get_all_dates(year, month, day):
@@ -99,12 +103,12 @@ def get_max_id_and_max_date(engine):
     }
     return parameters
 
-engine = create_engine('sqlite:////home/barbaruiva/Documents/Database/AGENDA_PRESIDENCIAL.db', echo=False)
+engine = create_engine(DB_PATH, echo=False)
 conn = engine.connect()
 
-df_calendario = pd.read_csv('/home/barbaruiva/Downloads/calendario.csv', sep=',')
+df_calendario = pd.read_csv(os.path.join(BASE, 'data', 'calendario.csv'), sep=',')
 df_calendario.set_index('DATA', inplace=True)
-df_calendario.to_sql('CALENDARIO', con=engine, if_exists='append')
+df_calendario.to_sql('CALENDARIO', con=engine, if_exists='replace')
 
 # PRIMEIRA INCLUSAO DE REGISTROS NA BASE
 #df_compromises = transform_compromises_in_dataframe(2019, 1, 1, 0)

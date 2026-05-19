@@ -1,8 +1,15 @@
+import os
 import requests
 import pandas as pd
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect
 from bs4 import BeautifulSoup
 from datetime import date, datetime, timedelta
+
+BASE = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = 'sqlite:///' + os.path.join(BASE, 'data', 'agenda.db')
+
+# gov.br rejeita o User-Agent padrao do requests; o timeout evita travar o backfill.
+HEADERS = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'}
 
 
 def get_all_dates(year, month, day):
@@ -25,7 +32,7 @@ def prepare_calls(year, month, day):
     return calls
 
 def get_all_compromises_from_date(url, campos_de_interesse):
-    page = requests.get(url)
+    page = requests.get(url, headers=HEADERS, timeout=30)
     soup = BeautifulSoup(page.content, 'html.parser')
 
     # Compromissos do dia
@@ -93,22 +100,28 @@ def transform_compromises_in_dataframe(year, month, day, initial_index):
 
 def get_max_id_and_max_date(engine):
     result = pd.read_sql_query("SELECT MAX(A.MEETING_ID) MAX_ID, STRFTIME('%Y-%m-%d', MAX(A.BEGIN_HOUR)) MAX_DATE FROM AGENDA_PRESIDENCIAL AS A", engine)
+    if result['MAX_DATE'][0] is None:
+        return None
     parameters = {
         'MAX_ID' : result['MAX_ID'][0],
         'MAX_DATE' : datetime.strptime(result['MAX_DATE'][0], '%Y-%m-%d') + timedelta(days=1)
     }
     return parameters
 
-engine = create_engine('sqlite:////home/barbaruiva/Documents/Database/AGENDA_PRESIDENCIAL.db', echo=False)
+engine = create_engine(DB_PATH, echo=False)
 conn = engine.connect()
-parameters = get_max_id_and_max_date(engine)
-df_compromises = transform_compromises_in_dataframe(parameters['MAX_DATE'].year, parameters['MAX_DATE'].month, parameters['MAX_DATE'].day, parameters['MAX_ID'])
+
+if inspect(engine).has_table('AGENDA_PRESIDENCIAL'):
+    parameters = get_max_id_and_max_date(engine)
+else:
+    parameters = None
+
+if parameters is None:
+    print('Base vazia: realizando carga inicial a partir de 2019-01-01')
+    df_compromises = transform_compromises_in_dataframe(2019, 1, 1, 0)
+else:
+    df_compromises = transform_compromises_in_dataframe(parameters['MAX_DATE'].year, parameters['MAX_DATE'].month, parameters['MAX_DATE'].day, parameters['MAX_ID'])
+
 df_compromises.set_index('MEETING_ID', inplace=True)
 print('Numero de linhas a serem incluidas: ' + str(len(df_compromises)))
 df_compromises.to_sql('AGENDA_PRESIDENCIAL', con=engine, if_exists='append')
-
-
-# PRIMEIRA INCLUSAO DE REGISTROS NA BASE
-#df_compromises = transform_compromises_in_dataframe(2019, 1, 1, 0)
-#df_compromises.set_index('MEETING_ID', inplace=True)
-#df_compromises.to_sql('AGENDA_PRESIDENCIAL', con=engine, if_exists='append')

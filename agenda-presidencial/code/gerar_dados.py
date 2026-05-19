@@ -4,14 +4,9 @@ import pandas as pd
 pd.options.plotting.backend = "plotly"
 from sqlalchemy import create_engine
 from datetime import date, datetime, timedelta
-import dash
-import dash_html_components as html
-import dash_core_components as dcc
-import dash_bootstrap_components as dbc
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from dash.dependencies import Input, Output
 
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.decomposition import PCA

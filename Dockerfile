@@ -1,7 +1,11 @@
 # Imagem multiuso: scheduler (scraper + processor) e dashboard rodam a partir dela.
 # O comando é definido por docker-compose, por serviço.
+#
+# --platform=linux/amd64: as deps pinadas (pandas==1.2.4 etc.) só têm wheels
+# para amd64. Em Apple Silicon, Docker Desktop emula via Rosetta. Quando as
+# pins forem atualizadas para versões com wheels ARM64, remova esta linha.
 
-FROM python:3.8-slim
+FROM --platform=linux/amd64 python:3.8-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

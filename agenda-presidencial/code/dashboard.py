@@ -24,6 +24,8 @@ TEMPLATE = 'plotly_dark'
 
 
 def formato_hm(horas):
+    if horas is None or not math.isfinite(horas):
+        return '—'
     h = math.floor(horas)
     return f'{h}h{math.floor((horas - h) * 60)}'
 

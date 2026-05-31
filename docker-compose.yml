@@ -7,7 +7,8 @@
 
 services:
   db:
-    image: postgres:16-alpine
+    # Casar com o postgresql-client default do python:3.8-slim (Debian bookworm -> v15).
+    image: postgres:15-alpine
     restart: unless-stopped
     environment:
       POSTGRES_DB: agenda
@@ -49,14 +50,20 @@ services:
     restart: unless-stopped
     ports:
       - "${DASHBOARD_PORT:-8050}:8050"
-    environment:
-      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
     volumes:
       # Read-only: dashboard só lê CSVs, defense in depth.
       - .:/app:ro
-    command: >
-      sh -c "gunicorn --workers $${GUNICORN_WORKERS} --bind 0.0.0.0:8050
-             --chdir agenda-presidencial/code dashboard:server"
+    # Forma de lista para evitar tokenização errada do shell pelo compose.
+    # ${GUNICORN_WORKERS:-2} é expandido pelo compose antes de chegar ao docker.
+    command:
+      - gunicorn
+      - --workers
+      - "${GUNICORN_WORKERS:-2}"
+      - --bind
+      - 0.0.0.0:8050
+      - --chdir
+      - agenda-presidencial/code
+      - dashboard:server
 
 volumes:
   agenda_postgres_data:

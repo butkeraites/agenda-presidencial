@@ -28,7 +28,9 @@ class RepositorioAgenda:
         self._engine = engine if engine is not None else create_engine(url_do_banco(), echo=False)
 
     def carregar_compromissos(self):
-        return pd.read_sql_query(f"SELECT * FROM {self.TABELA_COMPROMISSOS}", self._engine)
+        # Identificadores entre aspas — Postgres baixa-caixa não-quotados;
+        # pandas.to_sql cria a tabela com aspas (preservando maiúsculas).
+        return pd.read_sql_query(f'SELECT * FROM "{self.TABELA_COMPROMISSOS}"', self._engine)
 
     def salvar_compromissos(self, df):
         df.to_sql(self.TABELA_COMPROMISSOS, con=self._engine, if_exists='append')
@@ -36,11 +38,15 @@ class RepositorioAgenda:
     def checkpoint(self):
         """``(proximo_id, proxima_data)`` para continuar a coleta, ou ``None`` se o banco está vazio.
 
-        SQL portável entre SQLite e Postgres — formata a data em Python.
+        SQL portável entre SQLite e Postgres — formata a data em Python e
+        usa identificadores quotados para preservar maiúsculas.
         """
         if not inspect(self._engine).has_table(self.TABELA_COMPROMISSOS):
             return None
-        sql = f"SELECT MAX(MEETING_ID) AS MAX_ID, MAX(BEGIN_HOUR) AS MAX_DATE FROM {self.TABELA_COMPROMISSOS}"
+        sql = (
+            f'SELECT MAX("MEETING_ID") AS "MAX_ID", MAX("BEGIN_HOUR") AS "MAX_DATE" '
+            f'FROM "{self.TABELA_COMPROMISSOS}"'
+        )
         result = pd.read_sql_query(sql, self._engine)
         max_date = result['MAX_DATE'][0]
         if max_date is None or pd.isna(max_date):

@@ -1,13 +1,13 @@
-"""Repositório SQLite para a agenda presidencial.
+"""Repositório para a agenda presidencial.
 
 Único módulo que conhece o esquema do banco. A URL vem da variável de
 ambiente ``AGENDA_DB_URL``, com fallback para ``data/agenda.db`` ao lado
-deste módulo. Para testes, passe uma engine própria (ex.: in-memory) no
-construtor.
+deste módulo. O dialeto fica a critério da URL — funciona em SQLite e
+Postgres sem mudanças. Para testes, passe uma engine própria (ex.:
+in-memory) no construtor.
 """
 
 import os
-from datetime import datetime, timedelta
 
 import pandas as pd
 from sqlalchemy import create_engine, inspect
@@ -34,18 +34,17 @@ class RepositorioAgenda:
         df.to_sql(self.TABELA_COMPROMISSOS, con=self._engine, if_exists='append')
 
     def checkpoint(self):
-        """``(proximo_id, proxima_data)`` para continuar a coleta, ou ``None`` se o banco está vazio."""
+        """``(proximo_id, proxima_data)`` para continuar a coleta, ou ``None`` se o banco está vazio.
+
+        SQL portável entre SQLite e Postgres — formata a data em Python.
+        """
         if not inspect(self._engine).has_table(self.TABELA_COMPROMISSOS):
             return None
-        sql = (
-            "SELECT MAX(MEETING_ID) MAX_ID, "
-            "STRFTIME('%Y-%m-%d', MAX(BEGIN_HOUR)) MAX_DATE "
-            f"FROM {self.TABELA_COMPROMISSOS}"
-        )
+        sql = f"SELECT MAX(MEETING_ID) AS MAX_ID, MAX(BEGIN_HOUR) AS MAX_DATE FROM {self.TABELA_COMPROMISSOS}"
         result = pd.read_sql_query(sql, self._engine)
         max_date = result['MAX_DATE'][0]
-        if max_date is None:
+        if max_date is None or pd.isna(max_date):
             return None
         proximo_id = int(result['MAX_ID'][0]) + 1
-        proxima_data = (datetime.strptime(max_date, '%Y-%m-%d') + timedelta(days=1)).date()
+        proxima_data = (pd.to_datetime(max_date) + pd.Timedelta(days=1)).date()
         return proximo_id, proxima_data

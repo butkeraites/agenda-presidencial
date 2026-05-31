@@ -1,127 +1,116 @@
-import os
-import requests
-import pandas as pd
-from sqlalchemy import create_engine, inspect
-from bs4 import BeautifulSoup
+"""Scraper da agenda presidencial.
+
+Três peças com seam entre elas:
+
+- ``fetch_dia(data)`` — adapter de rede. Único ponto que toca HTTP.
+- ``parse_dia(html, data)`` — função pura. Recebe HTML e devolve
+  ``list[dict]`` de compromissos. Testável com fixtures.
+- ``coletar_intervalo(...)`` — orquestrador. ``fetch`` é injectável
+  para que os testes substituam a rede por bytes locais.
+
+Uso: ``python main.py`` (continua de onde parou via ``repositorio``).
+"""
+
 from datetime import date, datetime, timedelta
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = 'sqlite:///' + os.path.join(BASE, 'data', 'agenda.db')
+import pandas as pd
+import requests
+from bs4 import BeautifulSoup
+
+from repositorio import RepositorioAgenda
+
+URL_BASE = 'https://www.gov.br/planalto/pt-br/acompanhe-o-planalto/agenda-do-presidente-da-republica/'
 
 # gov.br rejeita o User-Agent padrao do requests; o timeout evita travar o backfill.
-HEADERS = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'}
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
+}
+
+# Estrutura HTML do site: contêiner -> atributos extraídos por classe CSS.
+CAMPOS_DE_INTERESSE = {
+    'item-compromisso': [
+        'compromisso-inicio',
+        'compromisso-fim',
+        'compromisso-titulo',
+        'compromisso-local',
+    ]
+}
+
+COLUNAS = ['MEETING_ID', 'BEGIN_HOUR', 'END_HOUR', 'MEETING_TITLE', 'MEETING_LOCATION']
 
 
-def get_all_dates(year, month, day):
-    sdate = date(year, month, day)   # start date
-    edate = date.today()   # end date
-    delta = edate - sdate       # as timedelta
-    all_dates = []
-    for i in range(delta.days + 1):
-        day = sdate + timedelta(days=i)
-        all_dates.append(str(day))
+def url_para(data):
+    return URL_BASE + data.isoformat()
 
-    return all_dates
 
-def prepare_calls(year, month, day):
-    calls = {}
-    all_dates = get_all_dates(year, month, day)
-    for date in all_dates:
-        url = 'https://www.gov.br/planalto/pt-br/acompanhe-o-planalto/agenda-do-presidente-da-republica/' + date
-        calls[date] = url
-    return calls
+def datas_no_intervalo(inicio, fim):
+    return [inicio + timedelta(days=i) for i in range((fim - inicio).days + 1)]
 
-def get_all_compromises_from_date(url, campos_de_interesse):
-    page = requests.get(url, headers=HEADERS, timeout=30)
-    soup = BeautifulSoup(page.content, 'html.parser')
 
-    # Compromissos do dia
+def fetch_dia(data):
+    """Adapter de rede: baixa o HTML do dia."""
+    return requests.get(url_para(data), headers=HEADERS, timeout=30).content
+
+
+def parse_dia(html, data, campos=CAMPOS_DE_INTERESSE):
+    """Função pura: HTML + data -> lista de compromissos.
+
+    Cada compromisso é um dict ``{BEGIN_HOUR, END_HOUR, MEETING_TITLE,
+    MEETING_LOCATION}``. Compromissos sem todos os campos esperados são
+    descartados silenciosamente (comportamento herdado).
+    """
+    soup = BeautifulSoup(html, 'html.parser')
+    atributos = campos['item-compromisso']
+    iso = data.isoformat()
     compromissos = []
-    for campo in campos_de_interesse:
-        elementos_campo = soup.find_all(class_=campo)
-        for elemento_campo in elementos_campo:
-            compromisso = {}
-            for atributo in campos_de_interesse[campo]:
-                valor_atributo = elemento_campo.find(class_=atributo)
-                if valor_atributo:
-                    compromisso[atributo] = valor_atributo.string
-            compromissos.append(compromisso)
+    for elemento in soup.find_all(class_='item-compromisso'):
+        raw = {}
+        for atributo in atributos:
+            tag = elemento.find(class_=atributo)
+            if tag:
+                raw[atributo] = tag.string
+        if any(a not in raw for a in atributos):
+            continue
+        compromissos.append({
+            'BEGIN_HOUR': datetime.strptime(iso + raw['compromisso-inicio'], '%Y-%m-%d%Hh%M'),
+            'END_HOUR': datetime.strptime(iso + raw['compromisso-fim'], '%Y-%m-%d%Hh%M'),
+            'MEETING_TITLE': raw['compromisso-titulo'],
+            'MEETING_LOCATION': raw['compromisso-local'],
+        })
     return compromissos
 
-def get_all_compromises(year, month, day, campos_de_interesse):
-    calls = prepare_calls(year, month, day)
-    compromises = {}
-    for call in calls:
-        print('Capturando ' + call + '[...]')
-        compromises[call] = get_all_compromises_from_date(calls[call], campos_de_interesse)
-    return compromises
 
-def has_all_data(meeting, campos_de_interesse):
-    all_data_found = True
-    for data in campos_de_interesse['item-compromisso']:
-        if data not in meeting:
-            all_data_found = False
-    return all_data_found
+def coletar_intervalo(inicio, fim, proximo_id, fetch=fetch_dia):
+    """Orquestra fetch + parse no intervalo ``[inicio, fim]``.
 
-def transform_compromises_in_dataframe(year, month, day, initial_index):
-    index = initial_index
-    
-    df_compromises = {
-        'MEETING_ID' : [],
-        'BEGIN_HOUR' : [],
-        'END_HOUR' : [],
-        'MEETING_TITLE' : [],
-        'MEETING_LOCATION' : []
-    }
-    
-    campos_de_interesse = {
-        'item-compromisso' : [
-            'compromisso-inicio',
-            'compromisso-fim',
-            'compromisso-titulo',
-            'compromisso-local'
-        ]
-    }
+    ``proximo_id`` é o primeiro MEETING_ID a atribuir. ``fetch`` é
+    injectável: passe uma função ``data -> bytes`` para testes.
+    """
+    linhas = []
+    for data in datas_no_intervalo(inicio, fim):
+        print('Capturando ' + data.isoformat() + '[...]')
+        for compromisso in parse_dia(fetch(data), data):
+            linhas.append({'MEETING_ID': proximo_id, **compromisso})
+            proximo_id += 1
+    return pd.DataFrame(linhas, columns=COLUNAS)
 
-    compromises = get_all_compromises(year, month, day, campos_de_interesse)
-    
-    for dates in compromises:
-        print('Incluindo no DataFrame [' + dates + ']')
-        for meeting in compromises[dates]:
-            if has_all_data(meeting, campos_de_interesse):
-                index += 1
-                df_compromises['MEETING_ID'].append(index)
-                df_compromises['BEGIN_HOUR'].append(datetime.strptime(dates + meeting['compromisso-inicio'], '%Y-%m-%d%Hh%M'))
-                df_compromises['END_HOUR'].append(datetime.strptime(dates + meeting['compromisso-fim'], '%Y-%m-%d%Hh%M'))
-                df_compromises['MEETING_TITLE'].append(meeting['compromisso-titulo'])
-                df_compromises['MEETING_LOCATION'].append(meeting['compromisso-local'])
-    
-    return pd.DataFrame(df_compromises)
 
-def get_max_id_and_max_date(engine):
-    result = pd.read_sql_query("SELECT MAX(A.MEETING_ID) MAX_ID, STRFTIME('%Y-%m-%d', MAX(A.BEGIN_HOUR)) MAX_DATE FROM AGENDA_PRESIDENCIAL AS A", engine)
-    if result['MAX_DATE'][0] is None:
-        return None
-    parameters = {
-        'MAX_ID' : result['MAX_ID'][0],
-        'MAX_DATE' : datetime.strptime(result['MAX_DATE'][0], '%Y-%m-%d') + timedelta(days=1)
-    }
-    return parameters
+def main(repo=None, hoje=None):
+    if repo is None:
+        repo = RepositorioAgenda()
+    if hoje is None:
+        hoje = date.today()
+    checkpoint = repo.checkpoint()
+    if checkpoint is None:
+        print('Base vazia: realizando carga inicial a partir de 2019-01-01')
+        proximo_id, proxima_data = 1, date(2019, 1, 1)
+    else:
+        proximo_id, proxima_data = checkpoint
+    df = coletar_intervalo(proxima_data, hoje, proximo_id)
+    df.set_index('MEETING_ID', inplace=True)
+    print('Numero de linhas a serem incluidas: ' + str(len(df)))
+    repo.salvar_compromissos(df)
 
-engine = create_engine(DB_PATH, echo=False)
-conn = engine.connect()
 
-if inspect(engine).has_table('AGENDA_PRESIDENCIAL'):
-    parameters = get_max_id_and_max_date(engine)
-else:
-    parameters = None
-
-if parameters is None:
-    print('Base vazia: realizando carga inicial a partir de 2019-01-01')
-    df_compromises = transform_compromises_in_dataframe(2019, 1, 1, 0)
-else:
-    df_compromises = transform_compromises_in_dataframe(parameters['MAX_DATE'].year, parameters['MAX_DATE'].month, parameters['MAX_DATE'].day, parameters['MAX_ID'])
-
-df_compromises.set_index('MEETING_ID', inplace=True)
-print('Numero de linhas a serem incluidas: ' + str(len(df_compromises)))
-df_compromises.to_sql('AGENDA_PRESIDENCIAL', con=engine, if_exists='append')
+if __name__ == '__main__':
+    main()

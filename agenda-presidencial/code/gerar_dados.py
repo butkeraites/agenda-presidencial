@@ -1,149 +1,67 @@
-import math
+"""Orquestra o estágio de processamento.
+
+Lê AGENDA_PRESIDENCIAL e CALENDARIO via repositorio, chama as agregações
+puras de agregacoes.py e escreve os 11 CSVs consumidos por dashboard.py.
+
+Uso: python gerar_dados.py
+"""
+
 import os
-import pandas as pd
-pd.options.plotting.backend = "plotly"
-from sqlalchemy import create_engine
-from datetime import date, datetime, timedelta
-import dash
-import dash_html_components as html
-import dash_core_components as dcc
-import dash_bootstrap_components as dbc
-import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from dash.dependencies import Input, Output
+from datetime import date
 
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
-from sklearn.decomposition import PCA
-
-from nltk.corpus import stopwords
 import nltk
+from nltk.corpus import stopwords
+
+import agregacoes as ag
+from calendario import calendario_para
+from repositorio import RepositorioAgenda
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = 'sqlite:///' + os.path.join(BASE, 'data', 'agenda.db')
-complete_path = os.path.join(BASE, 'data') + os.sep
-
-def return_stop_words_portuguese():
-    words = []
-    nltk.download('stopwords')
-    language = "portuguese"
-    for word in stopwords.words(language):
-        words.append(word)
-    return words
+DATA_DIR = os.path.join(BASE, 'data') + os.sep
+INICIO_DA_AGENDA = date(2019, 1, 1)
 
 
-def hour_rounder(t):
-    # Rounds to nearest hour by adding a timedelta hour if minute >= 30
-    t_rounded = t.replace(second=0, microsecond=0, minute=0, hour=t.hour)+timedelta(hours=t.minute//30)
-    return (t_rounded.hour)
+def stop_words_pt():
+    nltk.download('stopwords', quiet=True)
+    return list(stopwords.words('portuguese'))
 
 
-def get_all_data():
-    engine = create_engine(DB_PATH, echo=False)
-    conn = engine.connect()
-    return pd.read_sql_query("SELECT * FROM AGENDA_PRESIDENCIAL", engine)
+def main(repo=None, hoje=None):
+    if hoje is None:
+        hoje = date.today()
+    if repo is None:
+        repo = RepositorioAgenda()
 
-def get_all_callendar():
-    engine = create_engine(DB_PATH, echo=False)
-    conn = engine.connect()
-    return pd.read_sql_query("SELECT * FROM CALENDARIO", engine)
+    compromissos = ag.compromissos_com_duracao(repo.carregar_compromissos())
+    calendario = calendario_para(INICIO_DA_AGENDA, hoje)
 
-def get_meeting_date_and_duration(df):
-    df['BEGIN_HOUR'] = pd.to_datetime(df['BEGIN_HOUR'])
-    df['ROUNDED_BEGIN_HOUR'] = list(map(lambda x : hour_rounder(x), df['BEGIN_HOUR']))
-    df['END_HOUR'] = pd.to_datetime(df['END_HOUR'])
-    df['ROUNDED_END_HOUR'] = list(map(lambda x : hour_rounder(x), df['END_HOUR']))
-    df['MEETING_DATE'] = list(map(lambda x : x.date(), df['BEGIN_HOUR']))
-    df['MEETING_DURATION'] = list(map(lambda x : x.total_seconds()/3600,df['END_HOUR'] - df['BEGIN_HOUR']))
-    return df
+    com_calendario = ag.compromissos_com_calendario(compromissos, calendario)
+    duracao_por_mes = ag.duracao_por_mes(com_calendario)
+    dia_uteis_mes = ag.dia_uteis_por_mes(calendario, ate_mes=duracao_por_mes['MES_REFERENCIA'].max())
+    duracao_dia_semana = ag.duracao_por_dia_da_semana(com_calendario)
+    dia_uteis_semana = ag.dia_uteis_por_dia_da_semana(calendario, ate_data=compromissos['MEETING_DATE'].max())
+    por_hora = ag.atividades_por_hora(compromissos)
+    por_local = ag.atividades_por_local(compromissos)
+    acumulado, dates_with_df = ag.acumulado_diario(compromissos, calendario, hoje=hoje)
+    com_projecao = ag.projecao_2d_titulos(compromissos, stop_words=stop_words_pt())
+    comeco_final = ag.primeira_ultima_atividade_do_dia(compromissos)
 
-def get_callendar_types(df):
-    df['MEETING_DATE'] = pd.to_datetime(df['DATA'], dayfirst=True)
-    df['MEETING_DATE'] = list(map(lambda x : x.date(), df['MEETING_DATE']))
-    df['MES_REFERENCIA'] = pd.to_datetime(df['MES_REFERENCIA'], dayfirst=True)
-    df['MES_REFERENCIA'] = list(map(lambda x : x.date(), df['MES_REFERENCIA']))
-    df['FERIADO'] = pd.to_numeric(df['FERIADO'])
-    df['SEMANA_DO_ANO'] = pd.to_numeric(df['SEMANA_DO_ANO'])
-    df['MES'] = pd.to_numeric(df['MES'])
-    df['ANO'] = pd.to_numeric(df['ANO'])
-    return df
-
-#Agenda presidencial
-df = get_all_data()
-df = get_meeting_date_and_duration(df)
-
-#Calendario
-df_callendar = get_all_callendar()
-df_callendar = get_callendar_types(df_callendar)
-
-#Agrupado de horas de atividades oficiais por mes
-df_with_dates = df.merge(df_callendar, on='MEETING_DATE', how='left')
-df_duracao_por_data = df_with_dates.groupby('MES_REFERENCIA').sum()[['MEETING_DURATION']].reset_index()
-
-#Horas de trabalho de uma pessoa com CLT
-df_dia_uteis = df_callendar.groupby('MES_REFERENCIA').sum()[['DIA_UTIL']]
-df_dia_uteis['HORAS_DE_TRABALHO'] = df_dia_uteis['DIA_UTIL'] * 8
-df_dia_uteis = df_dia_uteis.reset_index()
-df_dia_uteis = df_dia_uteis.loc[df_dia_uteis['MES_REFERENCIA'] <= max(df_duracao_por_data['MES_REFERENCIA'])] 
-
-#Agrupado de horas de atividades oficiais por dia da semana
-ordem_dia_semana = ["Domingo","Segunda-feira","Terça-feira","Quarta-feira","Quinta-feira","Sexta-feira","Sábado"]
-df_duracao_por_dia_semana = df_with_dates.groupby('DIA_DA_SEMANA').sum()[['MEETING_DURATION']].reset_index()
-df_duracao_por_dia_semana['DIA_DA_SEMANA'] = pd.CategoricalIndex(df_duracao_por_dia_semana['DIA_DA_SEMANA'], ordered=True, categories=ordem_dia_semana)
-df_duracao_por_dia_semana = df_duracao_por_dia_semana.sort_values('DIA_DA_SEMANA')
-
-#Horas de trabalho de uma pessoa com CLT
-df_dia_uteis_semana = df_callendar.loc[df_callendar['MEETING_DATE'] <= max(df_with_dates['MEETING_DATE'])].groupby('DIA_DA_SEMANA').sum()[['DIA_UTIL']]
-df_dia_uteis_semana['HORAS_DE_TRABALHO'] = df_dia_uteis_semana['DIA_UTIL'] * 8
-df_dia_uteis_semana = df_dia_uteis_semana.reset_index()
-df_dia_uteis_semana['DIA_DA_SEMANA'] = pd.CategoricalIndex(df_dia_uteis_semana['DIA_DA_SEMANA'], ordered=True, categories=ordem_dia_semana)
-df_dia_uteis_semana = df_dia_uteis_semana.sort_values('DIA_DA_SEMANA')
-
-#Agrupado atividades oficiais por hora de inicio
-df_atividades_por_hora = df.groupby(['ROUNDED_BEGIN_HOUR'])['MEETING_ID'].count().reset_index()
-
-#Agrupado atividades oficiais por local
-df_atividades_por_local = df.groupby(['MEETING_LOCATION'])['MEETING_ID'].count().reset_index()
-
-#Acumulado diario de horas de atividades oficiais
-df_diario = df.groupby('MEETING_DATE').sum()[['MEETING_DURATION']].reset_index()
-dates_with_df = df_callendar.merge(df_diario, on='MEETING_DATE', how='left')
-dates_with_df = dates_with_df[(dates_with_df['MEETING_DATE'] <= date.today())]
-df_acumulado = dates_with_df[['MEETING_DATE', 'MEETING_DURATION', 'DIA_UTIL']].fillna(0)
-df_acumulado = pd.concat([df_acumulado, df_acumulado[['MEETING_DURATION', 'DIA_UTIL']].cumsum().add_prefix('CUM_')],axis=1)
-df_acumulado['CUM_DIA_UTIL'] = df_acumulado['CUM_DIA_UTIL'] * 8
-
-#Examinando os tipos de reuniões que foram realizadas
-tf_idf_vec_smooth = TfidfVectorizer(use_idf=True,  
-                        smooth_idf=True,  
-                        ngram_range=(1,4),stop_words=return_stop_words_portuguese())
-tf_idf_data_smooth = tf_idf_vec_smooth.fit_transform(list(df['MEETING_TITLE']))
-tf_idf_dataframe_smooth=pd.DataFrame(tf_idf_data_smooth.toarray(),columns=tf_idf_vec_smooth.get_feature_names())
-
-pca = PCA(n_components = 2)
-df_reduced_dim = pd.DataFrame(data=pca.fit_transform(tf_idf_dataframe_smooth))
-df_reduced_dim = df_reduced_dim.add_prefix('DIMENSION_').reset_index()
-completed_df = df.reset_index().merge(df_reduced_dim, on='index', how='left').drop(['index'], axis=1)
-
-#Primeiro compromisso dos dias
-df_primeira_atividade_do_dia = df.groupby('MEETING_DATE').agg({'ROUNDED_BEGIN_HOUR': 'min'}).reset_index()
-df_primeira_atividade_do_dia = df_primeira_atividade_do_dia.groupby(['ROUNDED_BEGIN_HOUR'])['MEETING_DATE'].count().reset_index()
-df_ultima_atividade_do_dia = df.groupby('MEETING_DATE').agg({'ROUNDED_END_HOUR': 'max'}).reset_index()
-df_ultima_atividade_do_dia = df_ultima_atividade_do_dia.groupby(['ROUNDED_END_HOUR'])['MEETING_DATE'].count().reset_index()
-df_primeira_atividade_do_dia['DAY_HOUR'] = df_primeira_atividade_do_dia['ROUNDED_BEGIN_HOUR']
-df_ultima_atividade_do_dia['DAY_HOUR'] = df_ultima_atividade_do_dia['ROUNDED_END_HOUR']
-
-df_comeco_final_dia = df_primeira_atividade_do_dia.merge(df_ultima_atividade_do_dia, on='DAY_HOUR', how='outer').fillna(0)
+    saidas = {
+        'df_duracao_por_data.csv':       duracao_por_mes,
+        'df_duracao_por_dia_semana.csv': duracao_dia_semana,
+        'df_atividades_por_hora.csv':    por_hora,
+        'df_atividades_por_local.csv':   por_local,
+        'df_acumulado.csv':              acumulado,
+        'completed_df.csv':              com_projecao,
+        'df_comeco_final_dia.csv':       comeco_final,
+        'df.csv':                        compromissos,
+        'dates_with_df.csv':             dates_with_df,
+        'df_dia_uteis.csv':              dia_uteis_mes,
+        'df_dia_uteis_semana.csv':       dia_uteis_semana,
+    }
+    for nome, frame in saidas.items():
+        frame.to_csv(DATA_DIR + nome)
 
 
-df_duracao_por_data.to_csv(complete_path + 'df_duracao_por_data.csv')
-df_duracao_por_dia_semana.to_csv(complete_path + 'df_duracao_por_dia_semana.csv')
-df_atividades_por_hora.to_csv(complete_path + 'df_atividades_por_hora.csv')
-df_atividades_por_local.to_csv(complete_path + 'df_atividades_por_local.csv')
-df_acumulado.to_csv(complete_path + 'df_acumulado.csv')
-completed_df.to_csv(complete_path + 'completed_df.csv')
-df_comeco_final_dia.to_csv(complete_path + 'df_comeco_final_dia.csv')
-df.to_csv(complete_path + 'df.csv')
-dates_with_df.to_csv(complete_path + 'dates_with_df.csv')
-df_dia_uteis.to_csv(complete_path + 'df_dia_uteis.csv')
-df_dia_uteis_semana.to_csv(complete_path + 'df_dia_uteis_semana.csv')
+if __name__ == '__main__':
+    main()

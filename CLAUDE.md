@@ -4,47 +4,52 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Webscrapes the Brazilian presidential public agenda (`gov.br/planalto`), stores it in a local SQLite database, processes the data, and exposes it through a Plotly Dash dashboard. Source code is written in Portuguese (variable/function names, comments, UI strings) — keep new code consistent with that.
+Webscrapes the Brazilian presidential public agenda (`gov.br/planalto`), stores it in a local SQLite database, processes the data, and exposes it through a Plotly Dash dashboard. Source code is written in Portuguese (variable/function names, comments, UI strings) — keep new code consistent with that. DB column names are the exception and stay in UPPER_SNAKE_CASE English.
 
 ## Architecture
 
-The system is a four-stage pipeline. Each stage is a standalone script in `agenda-presidencial/code/`; there is no orchestrator — scripts are run manually in order.
+Two runtime pipelines plus a dashboard. Each entry point is a standalone script in `agenda-presidencial/code/`; there is no orchestrator — scripts are run manually.
 
-1. **`main.py`** — Scrapes one URL per day from `gov.br/planalto/.../agenda-do-presidente-da-republica/<YYYY-MM-DD>`, parses meeting items with BeautifulSoup (CSS classes `item-compromisso`, `compromisso-inicio/-fim/-titulo/-local`), and appends rows to the SQLite table `AGENDA_PRESIDENCIAL`. On a normal run it auto-resumes: `get_max_id_and_max_date()` queries the DB for the latest meeting and only scrapes from the next day forward. The commented-out block at the bottom is the one-time initial backfill (`transform_compromises_in_dataframe(2019, 1, 1, 0)`).
+**Entry points**
 
-2. **`calendario.py`** — One-time loader: reads a manually prepared `calendario.csv` and writes it to the SQLite table `CALENDARIO`. This table supplies the business-calendar reference data (`DIA_UTIL`, `FERIADO`, `DIA_DA_SEMANA`, `MES_REFERENCIA`, `SEMANA_DO_ANO`, etc.) used to compare presidential activity against a standard CLT 8h workday.
+1. **`main.py`** — Scraper. Resumes from `repositorio.RepositorioAgenda.checkpoint()` (latest `MEETING_ID` + next date in `AGENDA_PRESIDENCIAL`), fetches one URL per day, parses meetings with BeautifulSoup, appends rows. Split into three seams: `fetch_dia(data)` (only HTTP), `parse_dia(html, data)` (pure, fixture-testable), and `coletar_intervalo(...)` (orchestrator with `fetch` injectable for tests).
 
-3. **`gerar_dados.py`** — The processing stage. Reads both DB tables, joins agenda against the calendar, computes all aggregations (duration per month/weekday/start-hour/location, cumulative totals, first/last activity of day) and a TF-IDF + PCA 2D projection of meeting titles for the similarity scatter. Writes ~11 pre-computed CSVs into `code/data/`.
+2. **`gerar_dados.py`** — Processing. Reads `AGENDA_PRESIDENCIAL` via the repository, builds the calendar in-memory via `calendario.calendario_para()`, calls the pure aggregations in `agregacoes`, writes 11 CSVs into `code/data/`. `main(hoje=None)` is deterministic given an as-of date.
 
-4. **`dashboard.py`** — The Dash app. Loads only the pre-computed CSVs (does **not** touch the database), builds Plotly figures, and serves the dashboard. Run after `gerar_dados.py` to pick up fresh data.
+3. **`dashboard.py`** — The Dash app. Loads the typed `DadosDoDashboard` snapshot via `dados_do_dashboard.carregar()`. KPIs are pure functions on the dataclass.
 
-Data flow: `gov.br` → `main.py` → SQLite → `gerar_dados.py` → CSVs in `code/data/` → `dashboard.py` → browser.
+**Library modules**
 
-## Hardcoded paths — important
+- **`repositorio.py`** — `RepositorioAgenda`: the only place that knows the SQLite schema. URL comes from `AGENDA_DB_URL` env var, fallback `data/agenda.db`. Pass `engine=create_engine('sqlite:///:memory:')` for tests.
+- **`calendario.py`** — Pure `calendario_para(inicio, fim) → DataFrame`. No CSV, no DB, no caching.
+- **`agregacoes.py`** — Pure aggregations (DataFrame in → DataFrame out): monthly/weekday/hourly/location, cumulative, TF-IDF + PCA projection, first/last activity.
+- **`dados_do_dashboard.py`** — Frozen `DadosDoDashboard` dataclass (11 named DataFrames) plus four pure KPIs (`media_horas_por_dia`, `media_horas_ultimos_30_dias`, `dias_uteis_sem_atividades`, `comparativo_clt_percentual`).
 
-Paths are hardcoded to the original author's machine and to the production host. Anything touching the filesystem will fail elsewhere and must be adjusted before running:
+Data flow: `gov.br` → `main.py` → SQLite (`AGENDA_PRESIDENCIAL`) → `gerar_dados.py` (+ `calendario.calendario_para` in-memory) → CSVs in `code/data/` → `dados_do_dashboard.carregar()` → `dashboard.py` → browser.
 
-- DB: `sqlite:////home/barbaruiva/Documents/Database/AGENDA_PRESIDENCIAL.db` (in `main.py`, `calendario.py`, `gerar_dados.py`)
-- `calendario.py` reads `/home/barbaruiva/Downloads/calendario.csv`
-- `gerar_dados.py` writes CSVs to `.../agenda-presidencial/code/data/`
-- `dashboard.py` reads CSVs from `/home/agendapresidencial/mysite/data/` (the production deployment path, different from where `gerar_dados.py` writes)
+## Configuration
+
+- `AGENDA_DB_URL` — SQLAlchemy URL for the SQLite (or other) database. Defaults to `sqlite:///<repo>/agenda-presidencial/code/data/agenda.db`.
+
+All other paths resolve relative to the source file. No hardcoded user-home paths.
 
 ## Running
 
-No requirements file exists. Dependencies must be installed manually:
+Two dependency sets:
 
 ```
-pip install requests pandas sqlalchemy beautifulsoup4 dash dash-html-components dash-core-components dash-bootstrap-components plotly scikit-learn nltk
+pip install -r requirements-pipeline.txt   # for main.py and gerar_dados.py
+pip install -r requirements.txt            # for dashboard.py
 ```
 
-`gerar_dados.py` downloads NLTK Portuguese stopwords at runtime (`nltk.download('stopwords')`).
+`gerar_dados.py` downloads NLTK Portuguese stopwords on first run (`nltk.download('stopwords', quiet=True)`).
 
-Run the pipeline stages directly with Python, e.g. `python agenda-presidencial/code/main.py`. The dashboard runs via `python agenda-presidencial/code/dashboard.py` and serves on the Dash default port (`debug=True`).
+Run stages directly: `python agenda-presidencial/code/main.py`, then `python .../gerar_dados.py`, then `python .../dashboard.py`. Dashboard serves on the Dash default port (`debug=True`).
 
-There is no build, no linter, and no test suite configured.
+There is no build, no linter, and no test suite configured. Pure functions in `agregacoes`, `calendario`, `dados_do_dashboard`, and `main.parse_dia` are fixture-testable; the repository supports in-memory engines.
 
 ## Conventions
 
-- `setup.py` declares the package `agenda-presidencial` but the actual scripts are not packaged as a module — they are run as standalone files.
-- DB column names are UPPER_SNAKE_CASE English; everything else (logic, UI) is Portuguese.
+- `setup.py` declares the package `agenda-presidencial` but the scripts are not packaged as a module — they are run as standalone files.
+- DB column names are UPPER_SNAKE_CASE English; everything else (module names, function names, comments, UI strings) is Portuguese.
 - `dashboard.py` registers a Dash callback exception suppressor but currently defines no callbacks — all figures are static, computed at import time.
